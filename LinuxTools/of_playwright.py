@@ -6,6 +6,7 @@ import base64
 import subprocess
 import time
 import sys
+import re
 from playwright.async_api import async_playwright
 
 # Generic User Agent - Playwright will override this based on chosen browser
@@ -21,59 +22,71 @@ class OFScraper:
     def __init__(self, username, profile_dir, user_agent=DEFAULT_UA):
         self.username = username
         self.profile_dir = os.path.abspath(profile_dir)
-        self.download_dir = os.path.join(DOWNLOAD_BASE, username)
-        self.metadata_dir = os.path.join(self.download_dir, "metadata")
-        self.user_agent = user_agent
+        
+        # Meta storage directory
+        meta_folder = username if username else "Purchased_Metadata"
+        self.metadata_dir = os.path.join(DOWNLOAD_BASE, meta_folder, "metadata")
         os.makedirs(self.metadata_dir, exist_ok=True)
         
+        self.user_agent = user_agent
         self.captured_media = {} # id -> data
-        self.captured_posts = []
-        self.captured_messages = []
         self.user_info = {}
         self.uid = None
+        self.is_purchased_mode = (username == None)
 
     async def handle_response(self, response):
         url = response.url
         if response.status != 200: return
         
         try:
-            if f"/api2/v2/users/{self.username}" in url and "medias" not in url:
+            # 1. User Info (Only if not in purchased mode)
+            if not self.is_purchased_mode and f"/api2/v2/users/{self.username}" in url and "medias" not in url:
                 data = await response.json()
                 self.user_info = data
                 self.uid = data.get("id")
                 print(f"\r  [Capture] User info for {self.username} (UID: {self.uid})")
-            elif "/posts/medias" in url:
+            
+            # 2. Media / Posts / Purchased
+            is_media_call = "/posts/medias" in url or "/posts" in url
+            is_purchased_call = "/posts/collection/purchased" in url
+            
+            if is_media_call or is_purchased_call:
                 data = await response.json()
-                items = data.get("list", [])
-                self.extract_media(items, "media_tab")
-                print(f"\r  [Capture] {len(items)} items from Media tab (Total unique: {len(self.captured_media)})", end="")
-            elif "/posts" in url and "medias" not in url:
-                data = await response.json()
-                items = data.get("list", [])
-                self.captured_posts.extend(items)
-                self.extract_media(items, "timeline")
-                print(f"\r  [Capture] {len(items)} items from Timeline (Total unique: {len(self.captured_media)})", end="")
-            elif "/messages" in url:
-                data = await response.json()
-                items = data.get("list", [])
-                self.captured_messages.extend(items)
-                self.extract_media(items, "messages")
-                print(f"\r  [Capture] {len(items)} items from Messages (Total unique: {len(self.captured_media)})", end="")
+                items = data.get("list", []) if isinstance(data, dict) else []
+                
+                valid_items = []
+                for item in items:
+                    if self.uid:
+                        author = item.get("author", {})
+                        if str(author.get("id")) == str(self.uid):
+                            valid_items.append(item)
+                    else:
+                        valid_items.append(item)
+                
+                if valid_items:
+                    self.extract_media(valid_items)
+                    mode_label = "Purchased" if is_purchased_call else "Media"
+                    print(f"\r  [Capture] {len(valid_items)} items from {mode_label} (Total unique: {len(self.captured_media)})", end="")
+
         except: pass
 
-    def extract_media(self, items, source_tag):
+    def extract_media(self, items):
         for item in items:
             media_list = item.get("media", [])
+            # Try to get creator username, fallback to 'Unknown'
+            author_name = item.get("author", {}).get("username", "Unknown_Creator")
+            
             for m in media_list:
                 m_id = str(m.get("id"))
                 if not m_id: continue
                 source_url = m.get("source", {}).get("source") or next((m.get("files", {}).get(k, {}).get("url") for k in ("source", "full") if m.get("files", {}).get(k, {}).get("url")), None)
+                
                 if source_url and m_id not in self.captured_media:
                     self.captured_media[m_id] = {
                         "id": m_id,
                         "type": m.get("type"),
                         "source": source_url,
-                        "captured_from": source_tag,
+                        "creator": author_name,
                         "timestamp": item.get("postedAt") or item.get("createdAt")
                     }
 
@@ -93,7 +106,7 @@ class OFScraper:
                 last_height = new_height
             if await page.query_selector(".b-loader"): await asyncio.sleep(1)
 
-    async def run(self, mode="media", browser_type="firefox"):
+    async def run(self, browser_type="firefox"):
         async with async_playwright() as p:
             if browser_type == "chromium": bt = p.chromium
             elif browser_type == "webkit": bt = p.webkit
@@ -113,31 +126,28 @@ class OFScraper:
             
             page.on("response", self.handle_response)
             
-            print(f"Opening OnlyFans via {browser_type}...")
-            await page.goto("https://onlyfans.com/")
+            if self.is_purchased_mode:
+                print(f"Opening OnlyFans Purchased Tab...")
+                await page.goto("https://onlyfans.com/my/collections/purchased")
+            else:
+                print(f"Opening Media Tab for {self.username}...")
+                await page.goto(f"https://onlyfans.com/{self.username}/media")
             
             try:
                 await page.wait_for_selector(".b-sidebar", timeout=20000)
             except:
                 print("\nLogin required. Please login in the browser window.")
-                await asyncio.get_event_loop().run_in_executor(None, input, "Press Enter after you are logged in...")
+                await asyncio.get_event_loop().run_in_executor(None, input, "Press Enter after you are logged in and on the correct page...")
 
-            if mode == "media":
-                print(f"Targeting Media tab for {self.username}")
-                await page.goto(f"https://onlyfans.com/{self.username}/media")
-                await self.auto_scroll(page)
-            elif mode == "messages":
-                print(f"Targeting Chats/Messages...")
-                await page.goto(f"https://onlyfans.com/my/chats")
-                print("Open the chat you want to scrape and scroll up.")
-                await asyncio.get_event_loop().run_in_executor(None, input, "Press Enter when done capturing...")
+            await self.auto_scroll(page)
             
-            # Metadata & Cookies
-            with open(os.path.join(self.metadata_dir, "user_info.json"), "w") as f: json.dump(self.user_info, f, indent=2)
-            with open(os.path.join(self.metadata_dir, "media_list.json"), "w") as f: json.dump(list(self.captured_media.values()), f, indent=2)
+            # Save metadata
+            with open(os.path.join(self.metadata_dir, "media_list.json"), "w") as f:
+                json.dump(list(self.captured_media.values()), f, indent=2)
             
+            # Export cookies
             browser_cookies = await context.cookies()
-            cookie_file = os.path.join(self.download_dir, f"cookies_{self.username}.txt")
+            cookie_file = os.path.join(self.metadata_dir, f"cookies_session.txt")
             with open(cookie_file, "w") as f:
                 for c in browser_cookies:
                     domain = c['domain'] if c['domain'].startswith('.') else '.' + c['domain']
@@ -148,27 +158,26 @@ class OFScraper:
             self.download_all(cookie_file)
 
     def download_all(self, cookie_file):
-        media_list = list(self.captured_media.values())
-        photos = [m for m in media_list if m["type"] == "photo"]
-        videos = [m for m in media_list if m["type"] == "video"]
-        queue = photos + videos
+        queue = list(self.captured_media.values())
+        print(f"\nDownloading to: {DOWNLOAD_BASE}")
         
-        print(f"\nDownloading to: {self.download_dir}")
         downloaded = skipped = errors = 0
         for i, m in enumerate(queue):
+            # Always route to the creator's folder within the main Downloads dir
+            creator_folder = m.get('creator', self.username) or "Unknown_Creator"
             subfolder = "Photos" if m["type"] == "photo" else "Videos"
-            target_path = os.path.join(self.download_dir, subfolder)
-            os.makedirs(target_path, exist_ok=True)
+            target_dir = os.path.join(DOWNLOAD_BASE, creator_folder, subfolder)
+                
+            os.makedirs(target_dir, exist_ok=True)
             ext = "mp4" if m["type"] == "video" else "jpg"
-            filepath = os.path.join(target_path, f"{m['id']}.{ext}")
+            filepath = os.path.join(target_dir, f"{m['id']}.{ext}")
             
             if os.path.exists(filepath) and os.path.getsize(filepath) > 0:
                 skipped += 1
                 continue
                 
-            print(f"  [{i+1}/{len(queue)}] {m['id']}.{ext}... ", end="", flush=True)
+            print(f"  [{i+1}/{len(queue)}] {m['id']}.{ext} ({creator_folder})... ", end="", flush=True)
             try:
-                # Use curl if available, fallback to simple request
                 cmd = ["curl", "-L", "-s", "--fail", "-o", filepath, "-A", self.user_agent, "-b", cookie_file, m["source"]]
                 res = subprocess.run(cmd, timeout=600)
                 if res.returncode == 0:
@@ -186,12 +195,11 @@ class OFScraper:
         print(f"New: {downloaded} | Existing: {skipped} | Failed: {errors}")
 
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser(description="OF Browser Scraper v3")
-    parser.add_argument("username", help="OF username")
+    parser = argparse.ArgumentParser(description="OF Browser Scraper v4")
+    parser.add_argument("username", nargs="?", help="OF username (leave empty for Purchased mode)")
     parser.add_argument("--profile", default="./of_profile", help="Browser profile directory")
-    parser.add_argument("--mode", choices=["media", "messages"], default="media", help="Scrape media tab or messages")
     parser.add_argument("--browser", choices=["firefox", "chromium", "webkit"], default="firefox", help="Browser engine")
     args = parser.parse_args()
     
     scraper = OFScraper(args.username, args.profile)
-    asyncio.run(scraper.run(args.mode, args.browser))
+    asyncio.run(scraper.run(args.browser))
