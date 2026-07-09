@@ -1,4 +1,4 @@
-﻿' Copyright (C) 2023  Andy https://github.com/AAndyProgram
+' Copyright (C) 2023  Andy https://github.com/AAndyProgram
 ' This program is free software: you can redistribute it and/or modify
 ' it under the terms of the GNU General Public License as published by
 ' the Free Software Foundation, either version 3 of the License, or
@@ -121,6 +121,39 @@ Namespace API.OnlyFans
                     Return DirectCast(DefaultInstance, SiteSettings).OFScraperPath_XML
                 Else
                     Return OFScraperPath_XML
+                End If
+            End Get
+        End Property
+        <PClonable, PXML("UsePlaywright")> Private ReadOnly Property UsePlaywright_XML As PropertyValue
+        <PropertyOption(ControlText:="Use Playwright method", ControlToolTip:="Use browser-based Playwright scraper", Category:=CAT_OFS)>
+        Friend ReadOnly Property UsePlaywright As PropertyValue
+            Get
+                If Not DefaultInstance Is Nothing Then
+                    Return DirectCast(DefaultInstance, SiteSettings).UsePlaywright_XML
+                Else
+                    Return UsePlaywright_XML
+                End If
+            End Get
+        End Property
+        <PClonable, PXML("PlaywrightScriptPath")> Private ReadOnly Property PlaywrightScriptPath_XML As PropertyValue
+        <PropertyOption(ControlText:="Playwright script path", ControlToolTip:="Path to the 'of_playwright.py' script", Category:=CAT_OFS)>
+        Friend ReadOnly Property PlaywrightScriptPath As PropertyValue
+            Get
+                If Not DefaultInstance Is Nothing Then
+                    Return DirectCast(DefaultInstance, SiteSettings).PlaywrightScriptPath_XML
+                Else
+                    Return PlaywrightScriptPath_XML
+                End If
+            End Get
+        End Property
+        <PClonable, PXML("PlaywrightBrowser")> Private ReadOnly Property PlaywrightBrowser_XML As PropertyValue
+        <PropertyOption(ControlText:="Playwright browser", ControlToolTip:="Browser to use: firefox, chromium, webkit", Category:=CAT_OFS)>
+        Friend ReadOnly Property PlaywrightBrowser As PropertyValue
+            Get
+                If Not DefaultInstance Is Nothing Then
+                    Return DirectCast(DefaultInstance, SiteSettings).PlaywrightBrowser_XML
+                Else
+                    Return PlaywrightBrowser_XML
                 End If
             End Get
         End Property
@@ -290,6 +323,23 @@ Namespace API.OnlyFans
                     End With
                 End If
             End If
+            UsePlaywright_XML = New PropertyValue(False)
+            PlaywrightScriptPath_XML = New PropertyValue(String.Empty, GetType(String))
+            If CStr(PlaywrightScriptPath_XML.Value).IsEmptyString Then
+                Dim checkDirs() As String = {
+                    $"{System.Windows.Forms.Application.StartupPath}\LinuxTools\of_playwright.py",
+                    $"{System.Windows.Forms.Application.StartupPath}\..\LinuxTools\of_playwright.py",
+                    $"{System.Windows.Forms.Application.StartupPath}\..\..\LinuxTools\of_playwright.py"
+                }
+                For Each d$ In checkDirs
+                    Dim f As SFile = d
+                    If f.Exists Then
+                        PlaywrightScriptPath_XML.Value = f.ToString
+                        Exit For
+                    End If
+                Next
+            End If
+            PlaywrightBrowser_XML = New PropertyValue("chromium")
             OFScraperMP4decrypt_XML = New PropertyValue(String.Empty, GetType(String))
             KeyModeDefault_XML = New PropertyValue(KeyModeDefault_Default)
             Keydb_Api_XML = New PropertyValue(String.Empty, GetType(String))

@@ -19,13 +19,18 @@ else:
     DOWNLOAD_BASE = os.path.expanduser("~/Downloads/OnlyFans")
 
 class OFScraper:
-    def __init__(self, username, profile_dir, user_agent=DEFAULT_UA):
+    def __init__(self, username, profile_dir, download_dir=None, user_agent=DEFAULT_UA):
         self.username = username
         self.profile_dir = os.path.abspath(profile_dir)
+        self.download_base = os.path.abspath(download_dir) if download_dir else DOWNLOAD_BASE
+        self.custom_dir = bool(download_dir)
         
         # Meta storage directory
         meta_folder = username if username else "Purchased_Metadata"
-        self.metadata_dir = os.path.join(DOWNLOAD_BASE, meta_folder, "metadata")
+        if self.custom_dir:
+            self.metadata_dir = os.path.join(self.download_base, "metadata")
+        else:
+            self.metadata_dir = os.path.join(self.download_base, meta_folder, "metadata")
         os.makedirs(self.metadata_dir, exist_ok=True)
         
         self.user_agent = user_agent
@@ -112,10 +117,18 @@ class OFScraper:
             elif browser_type == "webkit": bt = p.webkit
             else: bt = p.firefox
 
+            kwargs = {
+                'headless': False,
+                'viewport': {'width': 1280, 'height': 720}
+            }
+            if browser_type == "chromium":
+                kwargs['channel'] = 'chrome'
+                kwargs['ignore_default_args'] = ["--enable-automation"]
+                kwargs['args'] = ["--disable-blink-features=AutomationControlled"]
+
             context = await bt.launch_persistent_context(
                 self.profile_dir,
-                headless=False,
-                viewport={'width': 1280, 'height': 720}
+                **kwargs
             )
             
             page = await context.new_page()
@@ -159,14 +172,17 @@ class OFScraper:
 
     def download_all(self, cookie_file):
         queue = list(self.captured_media.values())
-        print(f"\nDownloading to: {DOWNLOAD_BASE}")
+        print(f"\nDownloading to: {self.download_base}")
         
         downloaded = skipped = errors = 0
         for i, m in enumerate(queue):
             # Always route to the creator's folder within the main Downloads dir
-            creator_folder = m.get('creator', self.username) or "Unknown_Creator"
             subfolder = "Photos" if m["type"] == "photo" else "Videos"
-            target_dir = os.path.join(DOWNLOAD_BASE, creator_folder, subfolder)
+            if self.custom_dir:
+                target_dir = os.path.join(self.download_base, subfolder)
+            else:
+                creator_folder = m.get('creator', self.username) or "Unknown_Creator"
+                target_dir = os.path.join(self.download_base, creator_folder, subfolder)
                 
             os.makedirs(target_dir, exist_ok=True)
             ext = "mp4" if m["type"] == "video" else "jpg"
@@ -199,7 +215,8 @@ if __name__ == "__main__":
     parser.add_argument("username", nargs="?", help="OF username (leave empty for Purchased mode)")
     parser.add_argument("--profile", default="./of_profile", help="Browser profile directory")
     parser.add_argument("--browser", choices=["firefox", "chromium", "webkit"], default="firefox", help="Browser engine")
+    parser.add_argument("--dir", help="Output directory")
     args = parser.parse_args()
     
-    scraper = OFScraper(args.username, args.profile)
+    scraper = OFScraper(args.username, args.profile, args.dir)
     asyncio.run(scraper.run(args.browser))

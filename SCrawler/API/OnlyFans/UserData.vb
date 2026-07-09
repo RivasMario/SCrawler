@@ -1,4 +1,4 @@
-﻿' Copyright (C) 2023  Andy https://github.com/AAndyProgram
+' Copyright (C) 2023  Andy https://github.com/AAndyProgram
 ' This program is free software: you can redistribute it and/or modify
 ' it under the terms of the GNU General Public License as published by
 ' the Free Software Foundation, either version 3 of the License, or
@@ -96,6 +96,11 @@ Namespace API.OnlyFans
             Try
                 _DownloadingException_AuthFileUpdate = False
                 If Not MySettings.SessionAborted Then
+                    If CBool(MySettings.UsePlaywright.Value) Then
+                        If IsSavedPosts Then Throw New NotSupportedException("Playwright method does not support Saved Posts.")
+                        OFS_Playwright_Download(Token)
+                        Exit Sub
+                    End If
                     ValidateOFScraper()
                     _AbsMediaIndex = 0
                     _DownloadedPostsSession = 0
@@ -624,6 +629,41 @@ Namespace API.OnlyFans
         End Function
 #End Region
 #Region "OFScraper support"
+        Private Function OFS_Playwright_Download(ByVal Token As CancellationToken) As Boolean
+            Try
+                Dim scriptPath$ = MySettings.PlaywrightScriptPath.Value
+                If scriptPath.IsEmptyString Then Throw New ArgumentNullException("PlaywrightScriptPath", "Playwright script path is not configured.")
+                Dim f As SFile = scriptPath
+                If Not f.Exists Then Throw New IO.FileNotFoundException("Playwright script not found", scriptPath)
+
+                Dim pythonExe$ = "python3"
+                If Environment.OSVersion.Platform = PlatformID.Win32NT Then
+                    pythonExe = "python"
+                End If
+
+                Dim username$ = Name
+                If username.IsEmptyString Then username = NameTrue
+
+                Dim downloadDir$ = DownloadContentDefault_GetRootDir()
+                Dim browser$ = MySettings.PlaywrightBrowser.Value
+                If browser.IsEmptyString Then browser = "firefox"
+
+                ' Command format: python3 "of_playwright.py" "username" --browser firefox --dir "downloadDir"
+                Dim args$ = $"""{f.Name}"" ""{username}"" --browser {browser} --dir ""{downloadDir}"""
+                Dim command$ = $"""{pythonExe}"" {args}"
+
+                ' Set working directory to the folder containing the script
+                Dim workingDir As SFile = f.CutPath
+
+                Using b As New TokenBatch(Token,, workingDir) With {.DebugMode = True}
+                    b.Execute(command)
+                End Using
+
+                Return True
+            Catch ex As Exception
+                Return ErrorsDescriber.Execute(EDP.SendToLog + EDP.ReturnValue, ex, $"{ToStringForLog()}: OFS_Playwright_Download", False)
+            End Try
+        End Function
         Private Function OFS_DownloadFile(ByVal URL As String, ByVal Token As CancellationToken) As List(Of SFile)
             Try
                 Const requestPattern$ = """{0}"" manual --config ""{1}"" --url {2}"
