@@ -646,7 +646,7 @@ Namespace API.OnlyFans
 
                 Dim downloadDir$ = DownloadContentDefault_GetRootDir()
                 Dim browser$ = MySettings.PlaywrightBrowser.Value
-                If browser.IsEmptyString Then browser = "firefox"
+                If browser.IsEmptyString Then browser = "chromium"
 
                 ' Command format: python3 "of_playwright.py" "username" --browser firefox --dir "downloadDir"
                 Dim args$ = $"""{f.Name}"" ""{username}"" --browser {browser} --dir ""{downloadDir}"""

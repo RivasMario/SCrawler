@@ -111,7 +111,7 @@ class OFScraper:
                 last_height = new_height
             if await page.query_selector(".b-loader"): await asyncio.sleep(1)
 
-    async def run(self, browser_type="firefox"):
+    async def run(self, browser_type="chromium"):
         async with async_playwright() as p:
             if browser_type == "chromium": bt = p.chromium
             elif browser_type == "webkit": bt = p.webkit
@@ -126,10 +126,23 @@ class OFScraper:
                 kwargs['ignore_default_args'] = ["--enable-automation"]
                 kwargs['args'] = ["--disable-blink-features=AutomationControlled"]
 
-            context = await bt.launch_persistent_context(
-                self.profile_dir,
-                **kwargs
-            )
+            try:
+                context = await bt.launch_persistent_context(
+                    self.profile_dir,
+                    **kwargs
+                )
+            except Exception as e:
+                print(f"Initial launch failed (ensure Google Chrome is installed if using chromium channel). Falling back... Error: {e}")
+                if 'channel' in kwargs:
+                    del kwargs['channel']
+                try:
+                    context = await bt.launch_persistent_context(
+                        self.profile_dir,
+                        **kwargs
+                    )
+                except Exception as inner_e:
+                    print(f"CRITICAL ERROR: Failed to launch Playwright browser. You may need to run 'python3 -m playwright install'. Error: {inner_e}")
+                    return
             
             page = await context.new_page()
             try:
@@ -149,8 +162,19 @@ class OFScraper:
             try:
                 await page.wait_for_selector(".b-sidebar", timeout=20000)
             except:
-                print("\nLogin required. Please login in the browser window.")
-                await asyncio.get_event_loop().run_in_executor(None, input, "Press Enter after you are logged in and on the correct page...")
+                print("\nLogin required. Please login in the browser window. Waiting for successful login...")
+                while True:
+                    try:
+                        await page.wait_for_selector(".b-sidebar", timeout=5000)
+                        print("Login detected! Navigating back to the target page...")
+                        if self.is_purchased_mode:
+                            await page.goto("https://onlyfans.com/my/collections/purchased")
+                        else:
+                            await page.goto(f"https://onlyfans.com/{self.username}/media")
+                        await page.wait_for_selector(".b-sidebar", timeout=20000)
+                        break
+                    except:
+                        pass
 
             await self.auto_scroll(page)
             
@@ -181,7 +205,7 @@ class OFScraper:
             if self.custom_dir:
                 target_dir = os.path.join(self.download_base, subfolder)
             else:
-                creator_folder = m.get('creator', self.username) or "Unknown_Creator"
+                creator_folder = m.get('creator') if m.get('creator') and m.get('creator') != "Unknown_Creator" else (self.username or "Unknown_Creator")
                 target_dir = os.path.join(self.download_base, creator_folder, subfolder)
                 
             os.makedirs(target_dir, exist_ok=True)
@@ -214,7 +238,7 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="OF Browser Scraper v4")
     parser.add_argument("username", nargs="?", help="OF username (leave empty for Purchased mode)")
     parser.add_argument("--profile", default="./of_profile", help="Browser profile directory")
-    parser.add_argument("--browser", choices=["firefox", "chromium", "webkit"], default="firefox", help="Browser engine")
+    parser.add_argument("--browser", choices=["firefox", "chromium", "webkit"], default="chromium", help="Browser engine")
     parser.add_argument("--dir", help="Output directory")
     args = parser.parse_args()
     
